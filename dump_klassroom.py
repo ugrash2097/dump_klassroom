@@ -1,5 +1,6 @@
 import requests
 import logging
+import pprint
 import sys
 import re
 
@@ -48,12 +49,12 @@ class KlassRoom:
         post_data.update(self.post_data())
         response = self.session.post(f'https://{self.api_url}/auth.basic',
                                      data=post_data)
-        return response.json()
+        self.auth_token = response.json()['auth_token']
 
 
 if __name__ == '__main__':
     kr = KlassRoom()
     kr.init_klassroom_session()
-    print(kr.app_connect())
-    print(kr.auth(*sys.argv[1:3]))
-    print(kr.app_connect())
+    kr.app_connect()
+    kr.auth(*sys.argv[1:3])
+    pprint.pprint(kr.app_connect())
