@@ -1,11 +1,11 @@
-import requests
-import logging
-import pprint
 import json
-import sys
-import re
+import logging
 import os
+import pprint
+import re
+import sys
 
+import requests
 
 logging.basicConfig(level=logging.INFO)
 
@@ -14,6 +14,7 @@ API_HOST = "api2.klassroom.co"
 WEB_URL = f"https://{WEB_HOST}/"
 AUTH_URL = f"https://{API_HOST}/auth.basic"
 CONNECT_URL = f"https://{API_HOST}/app.connect"
+HISTORY_URL = f"https://{API_HOST}/klass.history"
 
 
 class User:
@@ -34,6 +35,20 @@ class User:
     def id(self):
         try:
             return self._user_data["id"]
+        except KeyError:
+            return None
+
+    @property
+    def main_image_url(self):
+        try:
+            return self._user_data["main_image_url"]
+        except KeyError:
+            return None
+
+    @property
+    def thumb_image_url(self):
+        try:
+            return self._user_data["thumb_image_url"]
         except KeyError:
             return None
 
@@ -63,10 +78,14 @@ class Klassroom:
 
 
     def get_users(self):
-        self.users = {k: User(v, self) for k, v in self._klassroom_data["users"].items()}
+        self.users = {k: User(v, self)
+                      for k, v
+                      in self._klassroom_data["users"].items()}
 
     def get_klasses(self):
-        self.klasses = {k: Klass(v, self) for k, v in self._klassroom_data["klasses"].items()}
+        self.klasses = {k: Klass(v, self)
+                        for k, v
+                        in self._klassroom_data["klasses"].items()}
 
     @property
     def auth_token(self):
@@ -107,9 +126,6 @@ class Klassroom:
         response = self.session.post(CONNECT_URL, data=self.post_data)
         self._klassroom_data = response.json()
 
-    def pretty_print(self):
-        print 
-
     
 class Student:
     def __init__(self, student, klass):
@@ -142,6 +158,21 @@ class Student:
         except KeyError:
             return None
 
+    @property
+    def main_image_url(self):
+        try:
+            return self._student_data["main_image_url"]
+        except KeyError:
+            return None
+
+    @property
+    def thumb_image_url(self):
+        try:
+            return self._student_data["thumb_image_url"]
+        except KeyError:
+            return None
+
+
 class Klass:
     def __init__(self, klass, klassroom):
         # Initialize base
@@ -150,16 +181,27 @@ class Klass:
         self._klass_data = klass
         self.students = {}
         self.get_students()
+        self.posts = {}
+        self.get_post_history()
         logging.debug(f'Got {self.name} {self.school_name} ({self.level})')
 
     def get_students(self):
         logging.debug('Klass get_students')
-        self.students = {k: Student(v, self) for k, v in self._klass_data['students'].items()}
+        self.students = {k: Student(v, self)
+                         for k, v
+                         in self._klass_data['students'].items()}
 
     @property
     def school_name(self):
         try:
             return self._klass_data["school"]["name"]
+        except KeyError:
+            return None
+
+    @property
+    def id(self):
+        try:
+            return self._klass_data["id"]
         except KeyError:
             return None
 
@@ -184,6 +226,75 @@ class Klass:
         except KeyError:
             return None
 
+    def get_post_history(self):
+        post_data = {'id': self.id,
+                     'filter': 'all',
+                     'type': 'post',
+                     'from': '0'}
+        post_data.update(self.klassroom.post_data)
+        response = self.klassroom.session.post(HISTORY_URL, data=post_data)
+        self.posts = {k: Post(p, self)
+                      for k, p
+                      in response.json()["posts"].items()}
+        
+
+class Attachment:
+    def __init__(self, attachment, post):
+        # Initialize base
+        logging.debug('Attachment __init__')
+        self.post = post
+        self._attachment_data = attachment
+
+    @property
+    def thumb_url(self):
+        try:
+            return self._attachment_data["thumb_url"]
+        except KeyError:
+            return None
+
+    @property
+    def url(self):
+        try:
+            return self._attachment_data["url"]
+        except KeyError:
+            return None
+
+    @property
+    def name(self):
+        try:
+            return self._attachment_data["name"]
+        except KeyError:
+            return None
+
+
+class Post:
+    def __init__(self, post, klass):
+        # Initialize base
+        logging.debug('Post __init__')
+        self.klass = klass
+        self._post_data = post
+        self.attachments = {}
+        self.get_attachments()
+
+    @property
+    def text(self):
+        try:
+            return self._post_data["text"]
+        except KeyError:
+            return None
+
+    @property
+    def date(self):
+        try:
+            return self._post_data["date"]
+        except KeyError:
+            return None
+
+    def get_attachments(self):
+        self.attachments = {k: Attachment(a, self)
+                            for k, a 
+                            in self._post_data['attachments'].items()}
+        
     
 if __name__ == '__main__':
     kr = Klassroom(*sys.argv[1:3])
@@ -199,27 +310,13 @@ if __name__ == '__main__':
             print(f'- {student.name} ({student.gender} / {student.dob})')
             for link, member in student.family:
                 print(f'    {link}: {member.name}')
+        print("\nPosts:\n------\n")
+        for post in klass.posts.values():
+            print(post.text)
+            print("Attachments:\n------------")
+            for attachment in post.attachments.values():
+                print(f'{attachment.name}: {attachment.url}')
 
-    # def __getattr__(self, name):
-    #     try:
-    #         return self._klass_data[name]
-    #     except KeyError:
-    #         raise AttributeError
-
-
-
-# def get_post_history(self):
-#     post_data = {'id': self.id,
-#                     'filter': 'all',
-#                     'type': 'post',
-#                     'from': '0'}
-#     print(post_data)
-#     post_data.update(self.klassroom.post_data())
-#     response = self.klassroom.session.post(f'https://{self.klassroom.api_url}/klass.history',
-#                                             data=post_data)
-#     self.posts = response.json()
-#     with open(f'history_{self.id}.json', 'w') as f:
-#         json.dump(response.json(), f, indent=2)
     
 
 # def __str__(self):
@@ -239,4 +336,3 @@ if __name__ == '__main__':
     #         with open(f'{klass_key}/{key}/{attachment["name"]}', 'w') as a:
     #             for chunk in r.iter_content(chunk_size=8096):
     #                 a.write(chunk)
-            
