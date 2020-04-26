@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 import os
@@ -15,6 +16,9 @@ WEB_URL = f"https://{WEB_HOST}/"
 AUTH_URL = f"https://{API_HOST}/auth.basic"
 CONNECT_URL = f"https://{API_HOST}/app.connect"
 HISTORY_URL = f"https://{API_HOST}/klass.history"
+
+TLINK = '<a href="{url}">{text}</a>'
+THTML = '<html><head><title>{title}</title></head><body>{body}</body></html>'
 
 
 class User:
@@ -126,6 +130,16 @@ class Klassroom:
         response = self.session.post(CONNECT_URL, data=self.post_data)
         self._klassroom_data = response.json()
 
+    def to_html(self, htmldir):
+        klasses = ''.join([f'<li>{TLINK.format(url=k.key+".html", text=k.key)}</li>' for k in self.klasses.values()])
+        result = THTML.format(title=f'Klassroom dump - {str(datetime.datetime.now())}',
+                              body=f'<ul>{klasses}</ul>')
+        os.mkdir(htmldir)
+        with open(os.path.join(htmldir, 'index.html'), 'w') as index:
+            index.write(result)
+        # for klass in self.klasses.values():
+        #     klass.to_html(htmldir)
+
     
 class Student:
     def __init__(self, student, klass):
@@ -213,6 +227,13 @@ class Klass:
             return None
 
     @property
+    def key(self):
+        try:
+            return self._klass_data["key"]
+        except KeyError:
+            return None
+
+    @property
     def name(self):
         try:
             return self._klass_data["natural_name"]
@@ -236,6 +257,8 @@ class Klass:
         self.posts = {k: Post(p, self)
                       for k, p
                       in response.json()["posts"].items()}
+
+    
         
 
 class Attachment:
@@ -266,6 +289,12 @@ class Attachment:
         except KeyError:
             return None
 
+    def is_image(self):
+        try:
+            return self._attachment_data["type"] == "image"
+        except KeyError:
+            return False
+
 
 class Post:
     def __init__(self, post, klass):
@@ -286,7 +315,7 @@ class Post:
     @property
     def date(self):
         try:
-            return self._post_data["date"]
+            return datetime.datetime.fromtimestamp(self._post_data["date"] / 1000)
         except KeyError:
             return None
 
@@ -313,9 +342,11 @@ if __name__ == '__main__':
         print("\nPosts:\n------\n")
         for post in klass.posts.values():
             print(post.text)
+            print(post.date)
             print("Attachments:\n------------")
             for attachment in post.attachments.values():
                 print(f'{attachment.name}: {attachment.url}')
+    kr.to_html('test')
 
     
 
