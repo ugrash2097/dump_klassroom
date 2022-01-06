@@ -332,6 +332,7 @@ class Attachment:
                     if line.endswith(b'ts'):
                         logging.info(f'Reading {line}...')
                         a.write(session.get(line).content)
+            os.utime(filefullpath, (self.post.date.timestamp(), self.post.date.timestamp()))
             logging.info(f'video downloaded : {filename}')
 
         else:
