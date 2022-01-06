@@ -8,17 +8,18 @@ import sys
 
 import requests
 
+import urllib3
+urllib3.disable_warnings()
+
+
 logging.basicConfig(level=logging.INFO)
 
-WEB_HOST = "web.klassroom.fr"
+WEB_HOST = "www.klass.ly"
 API_HOST = "api2.klassroom.co"
 WEB_URL = f"https://{WEB_HOST}/"
 AUTH_URL = f"https://{API_HOST}/auth.basic"
 CONNECT_URL = f"https://{API_HOST}/app.connect"
 HISTORY_URL = f"https://{API_HOST}/klass.history"
-
-TLINK = '<a href="{url}">{text}</a>'
-THTML = '<html><head><title>{title}</title></head><body>{body}</body></html>'
 
 
 class User:
@@ -26,7 +27,7 @@ class User:
         logging.debug("Users __init__")
         self.klassroom = klassroom
         self._user_data = user_data
-        logging.debug(f"Got {self.name}")
+        logging.info(f"Got {self.name}")
 
     @property
     def name(self):
@@ -62,22 +63,27 @@ class Klassroom:
         # Initialize base properties
         logging.debug('Klassroom __init__')
         self.session = requests.session()
+        self.session.proxies = None #{'http': '10.0.0.165:8080', 'https': '10.0.0.165:8080'}
+        self.session.verify = False
+        self.session.headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0'}
         self.web_device = None
         self.app_id = None
         self._auth_data = None
         self._klassroom_data = None
         self.users = {}
         self.klasses = {}
+        self.klassroomauth = 'delete'
 
         # Initialize credentials
         self.phone = phone
         self.password = password
 
         # Initialize session
-        self.init_session()
-        self.authenticate()
+        self.frontpage()
         self.connect()
-        self.get_users()
+        self.authenticate()
+        self.frontpage()
+        self.connect()
         self.get_klasses()
 
 
@@ -105,40 +111,39 @@ class Klassroom:
                 'app_id': self.app_id,
                 'version': '4.0',
                 'culture': 'fr',
-                'gmt_offset': '-120',
+                'gmt_offset': '-60',
                 'tz': 'Europe/Paris',
                 'dst': 'true'}
 
-    def init_session(self):
-        logging.debug('Klassroom init_session')
-        response = self.session.get(WEB_URL)
+    def frontpage(self):
+        logging.info(WEB_URL)
+        r = self.session.get(WEB_URL)
+        self.klassroomauth = re.search(r'klassroomauth=([0-9a-z]+)"', r.text).group(1)
+        logging.info(f'klassroomauth : {self.klassroomauth}')
         self.web_device = self.session.cookies['klassroom_device']
-        logging.debug(f'Got web_device: {self.web_device}')
-        self.app_id = re.search(r'api_key:"([0-9a-f]+)",', response.text).group(1)
-        logging.debug(f'Got app_id: {self.app_id}')
+        logging.info(f'Got web_device: {self.web_device}')
+        bundel_url = re.search(r'js/_react/dist/bundle.*.js', r.text).group(0)
+        response = self.session.get(WEB_URL + bundel_url)
+        self.app_id = re.search(r'APP_ID:"([0-9a-f]+)",', response.text).group(1)
+        logging.info(f'Got app_id: {self.app_id}')
+
+        logging.info(f'{WEB_URL}_data/klassroomauth?klassroomauth={self.klassroomauth}')
+        self.session.get(f'{WEB_URL}_data/klassroomauth?klassroomauth={self.klassroomauth}')
+
 
     def authenticate(self):
-        logging.debug('Klassroom authenticate')
+        logging.info('Klassroom authenticate')
         post_data = {'phone': self.phone,
                      'password': self.password}
         post_data.update(self.post_data)
         response = self.session.post(AUTH_URL, data=post_data)
         self._auth_data = response.json()
+        self.session.cookies["klassroom_token"] = self.auth_token
 
     def connect(self):
-        logging.debug('Klassroom connect')
+        logging.info('Klassroom connect')
         response = self.session.post(CONNECT_URL, data=self.post_data)
         self._klassroom_data = response.json()
-
-    def to_html(self, htmldir):
-        klasses = ''.join([f'<li>{TLINK.format(url=k.key+".html", text=k.key)}</li>' for k in self.klasses.values()])
-        result = THTML.format(title=f'Klassroom dump - {str(datetime.datetime.now())}',
-                              body=f'<ul>{klasses}</ul>')
-        os.mkdir(htmldir)
-        with open(os.path.join(htmldir, 'index.html'), 'w') as index:
-            index.write(result)
-        # for klass in self.klasses.values():
-        #     klass.to_html(htmldir)
 
     
 class Student:
@@ -197,10 +202,10 @@ class Klass:
         self.get_students()
         self.posts = {}
         self.get_post_history()
-        logging.debug(f'Got {self.name} {self.school_name} ({self.level})')
+        logging.info(f'Got {self.name} {self.school_name} ({self.level})')
 
     def get_students(self):
-        logging.debug('Klass get_students')
+        logging.info('Klass get_students')
         self.students = {k: Student(v, self)
                          for k, v
                          in self._klass_data['students'].items()}
@@ -248,18 +253,25 @@ class Klass:
             return None
 
     def get_post_history(self):
+        min_date = ''
         post_data = {'id': self.id,
                      'filter': 'all',
                      'type': 'post',
                      'from': '0'}
         post_data.update(self.klassroom.post_data)
-        response = self.klassroom.session.post(HISTORY_URL, data=post_data)
-        self.posts = {k: Post(p, self)
-                      for k, p
-                      in response.json()["posts"].items()}
+        finished = False
+        while not finished:
+            response = self.klassroom.session.post(HISTORY_URL, data=post_data)
+            try:
+                min_date = min([post["date"] for post in response.json()["posts"].values()])
+            except:
+                break
+            self.posts.update({k: Post(p, self)
+                               for k, p
+                               in response.json()["posts"].items()})
+            logging.info(f'mindate : {min_date}')
+            post_data['from'] = f'{min_date - 1}'
 
-    
-        
 
 class Attachment:
     def __init__(self, attachment, post):
@@ -267,6 +279,9 @@ class Attachment:
         logging.debug('Attachment __init__')
         self.post = post
         self._attachment_data = attachment
+
+
+
 
     @property
     def thumb_url(self):
@@ -294,6 +309,50 @@ class Attachment:
             return self._attachment_data["type"] == "image"
         except KeyError:
             return False
+
+    def download(self):
+        session = self.post.klass.klassroom.session
+        filename = os.path.join(self.post.klass.name, self.post.date.strftime("%d-%m-%Y_%H-%M-%S-") + self.name)
+        filefullpath = os.path.join('/mnt/KlassLy/', self.post.klass.name, self.post.date.strftime("%d-%m-%Y_%H-%M-%S-") + self.name)
+        if os.path.exists(filefullpath):
+            logging.info(f'Skip {filename}')
+            return
+        if self.url.endswith('m3u8'):
+            r = session.get(self.url)
+            reso_url = ""
+            for line in r.content.splitlines():
+                if line.endswith(b'm3u8'):
+                    if not line.startswith(b'https'):
+                        line = b'https://www.klass.ly/_data' + line
+                    reso_url = line
+            logging.info(f"reso_url : {reso_url}")
+            with open(filefullpath, 'wb') as a:
+                r = session.get(reso_url)
+                for line in r.content.splitlines():
+                    if line.endswith(b'ts'):
+                        logging.info(f'Reading {line}...')
+                        a.write(session.get(line).content)
+            logging.info(f'video downloaded : {filename}')
+
+        else:
+            if 'data.klassroom.co/img/' in self.url:
+                new_url = self.url.replace('https://data.klassroom.co/img/', 'https://www.klass.ly/_data/img/')
+                headers = {'Host': 'www.klass.ly', 'Sec-Fetch-Dest': 'image', 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Site': 'same-origin', 'Pragma': 'no-cache', 'Cache-Control': 'no-cache', 'Accept': 'image/avif,image/webp,*/*'}
+                r = session.get(new_url, cookies=session.cookies.get_dict(), headers=headers) 
+            else:
+                try:
+                    r = session.get(self.url)
+                except:
+                    logging.info(self._attachment_data)
+                    logging.info(self.post._post_data)
+                    return
+            if r.status_code == 200:
+                with open(filefullpath, 'wb') as a:
+                    a.write(r.content)
+                logging.info(f'file downloaded : {filename}')
+            else:
+                logging.error(f'{r.status_code} : {new_url}')
+
 
 
 class Post:
@@ -323,47 +382,14 @@ class Post:
         self.attachments = {k: Attachment(a, self)
                             for k, a 
                             in self._post_data['attachments'].items()}
-        
+      
     
 if __name__ == '__main__':
     kr = Klassroom(*sys.argv[1:3])
-    print(f'Web Device: {kr.web_device}')
-    print(f'AppId: {kr.app_id}')
-    print('\nUsers:\n------')
-    for user in kr.users.values():
-        print(user.name)
-    print('\nKlasses:\n--------')
     for klass in kr.klasses.values():
-        print(f'\n{klass.name} {klass.organization} ({klass.level})')
-        for student in klass.students.values():
-            print(f'- {student.name} ({student.gender} / {student.dob})')
-            for link, member in student.family:
-                print(f'    {link}: {member.name}')
-        print("\nPosts:\n------\n")
+        logging.info(f'Classe : {klass.name}')
+        os.makedirs(os.path.join('/mnt/KlassLy', klass.name), exist_ok=True)
         for post in klass.posts.values():
-            print(post.text)
-            print(post.date)
-            print("Attachments:\n------------")
             for attachment in post.attachments.values():
-                print(f'{attachment.name}: {attachment.url}')
-    kr.to_html('test')
+                attachment.download()
 
-    
-
-# def __str__(self):
-#     students_list = "\n".join([str(s) for s in self.students])
-#     return f'{self.name} {self.school} ({self.level})\n{students_list}'
-    # for key, post in kklass.posts['posts'].items():
-    #     logging.debug(f'Post {key}')
-    #     try:
-    #         os.mkdir(f'{klass_key}/{key}')
-    #     except:
-    #         pass
-    #     with open(f'{klass_key}/{key}/index.html', 'w') as f:
-    #         f.write(post['text'])
-    #     for attachment in post['attachments'].values():
-    #         r = kr.session.get(attachment['url'], stream=True)
-    #         logging.debug(f'Downloading {klass_key}/{key}/{attachment["name"]}')
-    #         with open(f'{klass_key}/{key}/{attachment["name"]}', 'w') as a:
-    #             for chunk in r.iter_content(chunk_size=8096):
-    #                 a.write(chunk)
